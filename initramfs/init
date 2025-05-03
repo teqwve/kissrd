@@ -1,0 +1,67 @@
+#!/bin/busybox sh
+
+trap 'sh' EXIT
+
+mount -n -t proc none /proc
+mount -n -t sysfs none /sys
+mount -n -t devtmpfs none /dev
+
+shell=0
+
+read -r cmdline < /proc/cmdline
+for param in ${cmdline}; do
+    case "${param}" in
+        root=*)
+            root="${param#*=}"
+            ;;
+        rd.modules=*)
+            modules="${param#*=}"
+            modules="${modules//,/ }"
+            ;;
+        rd.actions=*)
+            actions="${param#*=}"
+            actions="${actions//,/ }"
+            ;;
+        rd.shell)
+            shell=1
+            ;;
+    esac
+done
+
+depmod
+for module in ${modules}; do
+    modprobe "${module}"
+done
+
+for action in ${actions}; do
+    action_name="$(echo "${action}" | cut -d: -f1)"
+    case "${action_name}" in
+        lvm)
+            lv_name="$(echo "${action}" | cut -d: -f2)"
+
+            lvm vgscan --mknodes >/dev/null
+            lvm lvchange --activate=y "${lv_name}"
+            lvm vgscan --mknodes >/dev/null
+            ;;
+        luks)
+            luks_device="$(echo "${action}" | cut -d: -f2)"
+            luks_name="$(echo "${action}" | cut -d: -f3)"
+
+            cryptsetup luksOpen "${luks_device}" "${luks_name}"
+            ;;
+    esac
+done
+
+mount "${root}" /mnt/root || sh
+
+if [ "${shell}" = 1 ]; then
+    exec sh
+fi
+
+umount /dev
+umount /sys
+umount /proc
+
+trap '' EXIT
+
+exec switch_root /mnt/root /sbin/init

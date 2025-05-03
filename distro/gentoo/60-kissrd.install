@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -e -u -o pipefail
+
+COMMAND="$1"
+KERNEL_VERSION="$2"
+
+INITRAMFS="/boot/initramfs-$KERNEL_VERSION.gz"
+
+case "$COMMAND" in
+    add)
+        kissrd --kver "$KERNEL_VERSION" --overwrite
+        ;;
+    remove)
+        rm -f "$INITRAMFS" "$INITRAMFS.old"
+        ;;
+esac

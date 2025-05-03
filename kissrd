@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+
+set -u -e -o pipefail
+
+log() {
+    printf "%s\t%s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$*" 1>&2
+}
+
+install_module() {
+    module="$1"
+    module_file="$(modinfo -k "${kver}" --filename "${module}")"
+    module_dependencies="$(modinfo -k "${kver}" --field depends "${module}")"
+
+    log "... mod ${module}"
+    if [[ "${module_file}" != "(builtin)" ]]; then
+        mkdir -p "${build_dir}$(dirname "$module_file")"
+        cp "${module_file}" "${build_dir}${module_file}"
+    fi
+
+    for dependency in ${module_dependencies//,/ }; do
+        install_module "${dependency}"
+    done
+}
+
+install_binary() {
+    binary="$1"
+    binary_path="$(command -v "${binary}")"
+
+    log "... bin ${binary_path}"
+    cp "${binary_path}" "${build_dir}"/usr/bin
+
+    libraries="$(ldd "${binary_path}" 2>/dev/null | grep -oE '/[^[:space:]]+' | sort -u)" || true
+    for library in ${libraries}; do
+        log "... lib ${library}"
+        mkdir -p "${build_dir}$(dirname "${library}")"
+        cp -L "${library}" "${build_dir}${library}"
+    done
+}
+
+config=""
+kver="$(uname -r)"
+initramfs=""
+overwrite="false"
+
+args="$(getopt -n kissrd -l config:,kver:,initramfs:,overwrite,help -o h -- "${@}")" || exit 1
+eval set -- "${args}"
+
+while [[ -n "$1" ]]; do
+    case "$1" in
+        --config)
+            config="$2"
+            shift 2
+            ;;
+        --kver)
+            kver="$2"
+            shift 2
+            ;;
+        --initramfs)
+            initramfs="$2"
+            shift 2
+            ;;
+        --overwrite)
+            overwrite="true"
+            shift 1
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--config CONFIG_FILE] [--kver KERNEL_VERSION] [--initramfs INITRAMFS_FILE] [--overwrite]"
+            exit 0
+            ;;
+        --)
+            break
+            ;;
+        *)
+            log "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+KISSRD_BINARIES=""
+KISSRD_MODULES=""
+
+if [[ "${EUID}" -ne 0 ]]; then
+    log "Must be run as root"
+    exit 1
+fi
+
+if [[ -z "${config}" && -f /etc/kissrd.conf ]]; then
+    config="/etc/kissrd.conf"
+fi
+
+if [[ -n "${config}" ]]; then
+    if [[ ! -f "${config}" ]]; then
+        log "Config ${config} not found"
+        exit 1
+    fi
+
+    log "Loading config ${config}"
+    # shellcheck source=./config/kissrd.conf
+    . "${config}"
+fi
+
+if [[ -z "${initramfs}" ]]; then
+    initramfs="/boot/initramfs-${kver}.gz"
+fi
+
+if [[ -f "${initramfs}" && "${overwrite}" == "false" ]]; then
+    log "Output initramfs ${initramfs} already exists"
+    exit 1
+fi
+
+log "Creating build directory"
+build_dir="$(mktemp -d)"
+trap 'log "Removing build directory"; rm -rf "$build_dir"' EXIT
+
+log "Creating structure"
+mkdir -p "${build_dir}"/{usr/bin,usr/lib,mnt/root,dev,sys,proc}
+
+log "Creating symlinks"
+ln -s usr/bin "${build_dir}"/bin
+ln -s usr/bin "${build_dir}"/sbin
+ln -s usr/lib "${build_dir}"/lib
+ln -s usr/lib "${build_dir}"/lib64
+
+log "Installing tools"
+for binary in busybox ${KISSRD_BINARIES}; do
+    install_binary "${binary}"
+done
+
+log "Installing modules"
+for module in ${KISSRD_MODULES}; do
+    install_module "${module}"
+done
+
+log "Installing init"
+cp "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/initramfs/init" "${build_dir}/init"
+
+log "Packaging ${initramfs}"
+( cd "${build_dir}" && find . -print0 \
+    | cpio --create --null --format=newc --quiet \
+    | gzip --best > "${initramfs}.new" )
+
+if [[ -f "${initramfs}" ]]; then
+    log "Backing up old initramfs"
+    mv "${initramfs}" "${initramfs}.old"
+fi
+
+mv "${initramfs}.new" "${initramfs}"

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+set -e -u -o pipefail
+
+KERNEL_VERSION="$1"
+KERNEL_IMAGE="$2"
+
+kissrd --kver "$KERNEL_VERSION" --overwrite

@@ -5,7 +5,15 @@ BINDIR  := $(DESTDIR)/usr/bin
 CONFDIR := $(DESTDIR)/etc
 HOOKDIR := $(DESTDIR)/etc/kernel/install.d
 
-.PHONY: all install uninstall install-gentoo uninstall-gentoo check
+.PHONY: \
+	all \
+	install \
+	uninstall \
+	install-gentoo-openrc \
+	install-gentoo-systemd \
+	uninstall-gentoo-openrc \
+	uninstall-gentoo-systemd \
+	check
 
 all:
 
@@ -19,11 +27,17 @@ install:
 uninstall:
 	rm -rf $(LIBDIR) $(BINDIR)/kissrd
 
-install-gentoo: install
-	install -Dm755 distro/gentoo/60-kissrd.install $(HOOKDIR)/60-kissrd.install
+install-gentoo-openrc: install
+	install -Dm755 distro/gentoo/openrc/60-kissrd.install $(DESTDIR)/etc/kernel/postinst.d/60-kissrd.install
 
-uninstall-gentoo: uninstall
-	rm -f $(HOOKDIR)/60-kissrd.install
+install-gentoo-systemd: install
+	install -Dm755 distro/gentoo/systemd/60-kissrd.install $(DESTDIR)/etc/kernel/install.d/60-kissrd.install
+
+uninstall-gentoo-openrc: uninstall
+	rm -f $(DESTDIR)/etc/kernel/postinst.d/60-kissrd.install
+
+uninstall-gentoo-systemd: uninstall
+	rm -f $(DESTDIR)/etc/kernel/install.d/60-kissrd.install
 
 check:
 	shellcheck -x kissrd
